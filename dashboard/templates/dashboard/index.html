@@ -1,0 +1,73 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Dashboard - Telegram Bot Admin{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <!-- Загальна статистика -->
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <dt class="text-sm font-medium text-gray-500 truncate">
+                Активні користувачі
+            </dt>
+            <dd class="mt-1 text-3xl font-semibold text-gray-900">
+                {{ active_users_count|default:"0" }}
+            </dd>
+        </div>
+    </div>
+
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <dt class="text-sm font-medium text-gray-500 truncate">
+                Нові користувачі (сьогодні)
+            </dt>
+            <dd class="mt-1 text-3xl font-semibold text-gray-900">
+                {{ new_users_today|default:"0" }}
+            </dd>
+        </div>
+    </div>
+
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <dt class="text-sm font-medium text-gray-500 truncate">
+                Видалені користувачі (сьогодні)
+            </dt>
+            <dd class="mt-1 text-3xl font-semibold text-gray-900">
+                {{ deleted_users_today|default:"0" }}
+            </dd>
+        </div>
+    </div>
+</div>
+
+<!-- Графіки -->
+<div class="mt-8 grid grid-cols-1 gap-6">
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="text-lg leading-6 font-medium text-gray-900">
+            Активність користувачів за останні 7 днів
+        </h3>
+        <div id="userActivityChart" class="mt-4" style="height: 400px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const data = [{
+            x: ['7 днів тому', '6 днів тому', '5 днів тому', '4 дні тому', '3 дні тому', '2 дні тому', 'Сьогодні'],
+            y: [0, 0, 0, 0, 0, 0, 0],
+            type: 'scatter',
+            name: 'Активні користувачі'
+        }];
+
+        const layout = {
+            yaxis: {
+                title: 'Кількість користувачів'
+            },
+            margin: { t: 30 }
+        };
+
+        Plotly.newPlot('userActivityChart', data, layout);
+    });
+</script>
+{% endblock %}

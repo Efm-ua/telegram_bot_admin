@@ -1,0 +1,112 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div style="padding: 20px;">
+    <!-- Загальна статистика -->
+    <div
+        style="background-color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="margin-bottom: 15px; color: #333;">Загальна статистика рефералів</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                <h3 style="color: #666; font-size: 14px;">Всього користувачів</h3>
+                <p style="font-size: 24px; font-weight: bold; color: #333;">{{ total_users }}</p>
+            </div>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                <h3 style="color: #666; font-size: 14px;">Користувачів з рефералами</h3>
+                <p style="font-size: 24px; font-weight: bold; color: #333;">
+                    {{ users_with_referrals }} ({{ referral_percentage|floatformat:1 }}%)
+                </p>
+            </div>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                <h3 style="color: #666; font-size: 14px;">Загальна кількість рефералів</h3>
+                <p style="font-size: 24px; font-weight: bold; color: #333;">{{ total_referrals }}</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Топ рефералів -->
+    <div
+        style="background-color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="margin-bottom: 15px; color: #333;">Топ-20 рефоводів</h2>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background-color: #f8f9fa;">
+                        <th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6;">Місце</th>
+                        <th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6;">Username</th>
+                        <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6;">Кількість
+                            рефералів</th>
+                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6;">У чаті</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in top_referrers %}
+                    <tr style="{% if forloop.counter <= 3 %}background-color: #fff3e0;{% endif %}">
+                        <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">
+                            {{ forloop.counter }}
+                        </td>
+                        <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">
+                            {% if user.username %}
+                            <a href="https://t.me/{{ user.username }}" target="_blank"
+                                style="color: #007bff; text-decoration: none;">
+                                @{{ user.username }}
+                            </a>
+                            {% else %}
+                            ID: {{ user.user_id }}
+                            {% endif %}
+                        </td>
+                        <td style="padding: 12px; border-bottom: 1px solid #dee2e6; text-align: right;">
+                            {{ user.refs_count }}
+                        </td>
+                        <td style="padding: 12px; border-bottom: 1px solid #dee2e6; text-align: center;">
+                            {% if user.in_chat %}
+                            <span style="color: green;">✓</span>
+                            {% else %}
+                            <span style="color: red;">✗</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Розподіл рефералів -->
+    <div style="background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="margin-bottom: 15px; color: #333;">Розподіл за кількістю рефералів</h2>
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background-color: #f8f9fa;">
+                    <th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6;">Діапазон</th>
+                    <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6;">Користувачів</th>
+                    <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6;">Відсоток</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for range in referral_ranges %}
+                <tr>
+                    <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">{{ range.name }}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid #dee2e6; text-align: right;">{{ range.count }}
+                    </td>
+                    <td style="padding: 12px; border-bottom: 1px solid #dee2e6; text-align: right;">
+                        {{ range.percentage|floatformat:1 }}%
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Кнопка повернення -->
+<div style="margin: 20px;">
+    <a href="{% url 'admin:dashboard_telegramuser_changelist' %}" style="background: #79aec8;
+              padding: 10px 15px;
+              color: white;
+              text-decoration: none;
+              border-radius: 4px;">
+        ← Повернутися до списку
+    </a>
+</div>
+{% endblock %}
