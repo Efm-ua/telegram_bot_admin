@@ -1,19 +1,83 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.urls import reverse, path
 from django.template.response import TemplateResponse
+from django.contrib import messages
+import asyncio
 from .models import TelegramUser, Statistics, UserActivity
+from .services.status_checker import StatusChecker
+
+@admin.action(description="Перевірити статус вибраних користувачів")
+def check_users_status(modeladmin, request, queryset):
+    """Масова перевірка статусу користувачів"""
+    try:
+        checker = StatusChecker()
+        results = asyncio.run(checker.check_users_status(list(queryset)))
+        
+        message = (
+            f"Перевірено {results['checked']} користувачів:\n"
+            f"Активні боти: {results['active_bot']}\n"
+            f"Неактивні боти: {results['inactive_bot']}\n"
+            f"У чаті: {results['in_chat']}\n"
+            f"Не в чаті: {results['not_in_chat']}"
+        )
+        messages.success(request, message)
+    except Exception as e:
+        messages.error(request, f"Помилка при перевірці: {str(e)}")
+
+class HasReferralsFilter(admin.SimpleListFilter):
+    title = 'Наявність рефералів'
+    parameter_name = 'has_referrals'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('yes', 'Є реферали'),
+            ('no', 'Немає рефералів'),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.annotate(refs_count=Count('referrals')).filter(refs_count__gt=0)
+        if self.value() == 'no':
+            return queryset.annotate(refs_count=Count('referrals')).filter(refs_count=0)
+
+class UserStatusFilter(admin.SimpleListFilter):
+    title = 'Статус користувача'
+    parameter_name = 'user_status'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('active_in_chat', 'Активний бот + в чаті'),
+            ('active_no_chat', 'Активний бот + не в чаті'),
+            ('inactive_in_chat', 'Неактивний бот + в чаті'),
+            ('inactive_no_chat', 'Неактивний бот + не в чаті'),
+            ('never_checked', 'Ніколи не перевірявся'),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == 'active_in_chat':
+            return queryset.filter(is_active=True, in_chat=True)
+        if self.value() == 'active_no_chat':
+            return queryset.filter(is_active=True, in_chat=False)
+        if self.value() == 'inactive_in_chat':
+            return queryset.filter(is_active=False, in_chat=True)
+        if self.value() == 'inactive_no_chat':
+            return queryset.filter(is_active=False, in_chat=False)
+        if self.value() == 'never_checked':
+            return queryset.filter(last_status_check__isnull=True)
 
 @admin.register(TelegramUser)
 class TelegramUserAdmin(admin.ModelAdmin):
     change_list_template = 'admin/dashboard/telegramuser/change_list.html'
     
     list_display = ('user_id', 'username_display', 'language', 
-                   'referrals_display', 'chat_status', 'join_date')
-    list_filter = ('in_chat', 'language', 'is_active')
+                   'referrals_display', 'bot_status', 'chat_status', 
+                   'last_check_display', 'join_date')
+    list_filter = (UserStatusFilter, HasReferralsFilter, 'language', 'in_chat', 'is_active')
     search_fields = ('user_id', 'username', 'referral_code')
     ordering = ('-join_date',)
+    actions = [check_users_status]
 
     def get_urls(self):
         urls = super().get_urls()
@@ -36,18 +100,42 @@ class TelegramUserAdmin(admin.ModelAdmin):
 
     def referrals_display(self, obj):
         count = obj.referrals.count()
-        return f"{count} {'рефералів' if count != 1 else 'реферал'}"
+        if count > 0:
+            return format_html(
+                '<span style="color: green;">{}</span> {}',
+                count,
+                'рефералів' if count != 1 else 'реферал'
+            )
+        return '0 рефералів'
     referrals_display.short_description = 'Реферали'
+
+    def bot_status(self, obj):
+        icon = '✓' if obj.is_active else '✗'
+        color = 'green' if obj.is_active else 'red'
+        status = 'Активний' if obj.is_active else 'Видалив бота'
+        date = f" ({obj.deleted_bot_at.strftime('%d.%m.%Y')})" if obj.deleted_bot_at else ""
+        return format_html(
+            '<span style="color: {};">{} {}{}</span>', 
+            color, icon, status, date
+        )
+    bot_status.short_description = 'Статус бота'
 
     def chat_status(self, obj):
         icon = '✓' if obj.in_chat else '✗'
         color = 'green' if obj.in_chat else 'red'
-        status = 'У чаті' if obj.in_chat else 'Не в чаті'
+        status = 'В чаті' if obj.in_chat else 'Не в чаті'
+        date = f" (вийшов {obj.left_chat_at.strftime('%d.%m.%Y')})" if obj.left_chat_at else ""
         return format_html(
-            '<span style="color: {};">{} {}</span>', 
-            color, icon, status
+            '<span style="color: {};">{} {}{}</span>', 
+            color, icon, status, date
         )
-    chat_status.short_description = 'Статус у чаті'
+    chat_status.short_description = 'Статус в чаті'
+
+    def last_check_display(self, obj):
+        if obj.last_status_check:
+            return obj.last_status_check.strftime('%d.%m.%Y %H:%M')
+        return 'Не перевірявся'
+    last_check_display.short_description = 'Остання перевірка'
 
     def referral_stats_view(self, request):
         # Загальна статистика
@@ -108,6 +196,35 @@ class TelegramUserAdmin(admin.ModelAdmin):
             'admin/dashboard/referral_stats.html',
             context
         )
+
+@admin.register(Statistics)
+class StatisticsAdmin(admin.ModelAdmin):
+    list_display = ('date', 'total_bot_users', 'webapp_opens', 
+                   'language_stats', 'chat_stats')
+    ordering = ('-date',)
+
+    def language_stats(self, obj):
+        return format_html(
+            'RU: {} | UA: {} | EN: {}',
+            obj.ru_users, obj.ua_users, obj.en_users
+        )
+    language_stats.short_description = 'Мови'
+
+    def chat_stats(self, obj):
+        total = obj.total_bot_users
+        chat_percentage = (obj.chat_members / total * 100) if total else 0
+        return format_html(
+            '{} з {} ({:.1f}%)',
+            obj.chat_members, total, chat_percentage
+        )
+    chat_stats.short_description = 'Учасники чату'
+
+@admin.register(UserActivity)
+class UserActivityAdmin(admin.ModelAdmin):
+    list_display = ('user', 'action_type', 'created_at')
+    list_filter = ('action_type', 'created_at')
+    search_fields = ('user__username', 'user__user_id')
+    ordering = ('-created_at',)
 
 # Налаштування заголовків адмінки
 admin.site.site_header = "DropHelper Bot Адміністрування"

@@ -11,8 +11,11 @@ class TelegramUser(models.Model):
     join_date = models.DateTimeField(default=timezone.now)
     last_webapp_open = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-    in_chat = models.BooleanField(default=False, help_text="Чи є користувач у Telegram чаті")
-    chat_join_date = models.DateTimeField(null=True, blank=True, help_text="Дата приєднання до чату")
+    in_chat = models.BooleanField(default=False)
+    chat_join_date = models.DateTimeField(null=True, blank=True)
+    last_status_check = models.DateTimeField(null=True, blank=True)
+    deleted_bot_at = models.DateTimeField(null=True, blank=True)
+    left_chat_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Telegram User"
