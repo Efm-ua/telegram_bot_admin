@@ -11,15 +11,11 @@ from ..models import TelegramUser
 class StatusChecker:
     def __init__(self, bot_token: str = None):
         self.bot_token = bot_token or settings.TELEGRAM_BOT_TOKEN
-        self.bot = None
+        self.bot = Bot(token=self.bot_token)  # Ініціалізуємо бота відразу
         self.chat_id = "@daodrophelper"
-        self.BATCH_SIZE = 30  # Кількість користувачів в одній пачці
-        self.DELAY_BETWEEN_REQUESTS = 1  # Затримка між запитами в секундах
-        self.DELAY_BETWEEN_BATCHES = 2  # Затримка між пачками в секундах
-
-    async def initialize(self):
-        """Ініціалізація бота"""
-        self.bot = Bot(token=self.bot_token)
+        self.BATCH_SIZE = 30
+        self.DELAY_BETWEEN_REQUESTS = 0.034
+        self.DELAY_BETWEEN_BATCHES = 0.1
 
     async def process_batch(self, users_batch: List[TelegramUser], progress_callback=None) -> Dict:
         """Обробка однієї пачки користувачів"""
@@ -31,79 +27,93 @@ class StatusChecker:
             'not_in_chat': 0
         }
 
+        # Створюємо таски для всіх користувачів в пачці
+        tasks = []
         for user in users_batch:
-            try:
-                # Перевірка статусу бота
-                is_bot_active = False
-                try:
-                    await self.bot.send_chat_action(chat_id=user.user_id, action="typing")
-                    is_bot_active = True
-                except RetryAfter as e:
-                    # Якщо потрапили в ліміт, чекаємо вказаний час
-                    await asyncio.sleep(e.retry_after)
-                    continue
-                except TelegramError:
-                    pass
-
-                # Невелика пауза між запитами
-                await asyncio.sleep(self.DELAY_BETWEEN_REQUESTS)
-
-                # Перевірка участі в чаті
-                is_in_chat = False
-                try:
-                    member = await self.bot.get_chat_member(chat_id=self.chat_id, user_id=user.user_id)
-                    is_in_chat = member.status in ['member', 'administrator', 'creator']
-                except RetryAfter as e:
-                    await asyncio.sleep(e.retry_after)
-                    continue
-                except TelegramError:
-                    pass
-
-                # Оновлення статусів
-                was_active = user.is_active
-                was_in_chat = user.in_chat
-                
-                user.is_active = is_bot_active
-                user.in_chat = is_in_chat
-                user.last_status_check = timezone.now()
-                
-                # Оновлення дат зміни статусу
-                if was_active and not is_bot_active:
-                    user.deleted_bot_at = timezone.now()
-                elif not was_active and is_bot_active:
-                    user.deleted_bot_at = None
-                    
-                if was_in_chat and not is_in_chat:
-                    user.left_chat_at = timezone.now()
-                elif not was_in_chat and is_in_chat:
-                    user.left_chat_at = None
-                    user.chat_join_date = timezone.now()
-                
-                await asyncio.to_thread(user.save)
-                
-                # Оновлення статистики
-                results['checked'] += 1
-                if is_bot_active:
-                    results['active_bot'] += 1
-                else:
-                    results['inactive_bot'] += 1
-                if is_in_chat:
-                    results['in_chat'] += 1
-                else:
-                    results['not_in_chat'] += 1
-
-                # Callback для оновлення прогресу
-                if progress_callback:
-                    await progress_callback(results['checked'])
-
-                # Пауза між запитами
-                await asyncio.sleep(self.DELAY_BETWEEN_REQUESTS)
-
-            except Exception as e:
-                print(f"Error processing user {user.user_id}: {str(e)}")
-                continue
-
+            tasks.append(self.check_single_user(user))
+        
+        # Виконуємо всі таски паралельно
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Обробляємо результати
+        for result in batch_results:
+            if isinstance(result, dict):  # якщо немає помилки
+                for key in results:
+                    results[key] += result[key]
+            
         return results
+
+    async def check_single_user(self, user: TelegramUser) -> Dict:
+        """Перевірка одного користувача"""
+        result = {
+            'checked': 0,
+            'active_bot': 0,
+            'inactive_bot': 0,
+            'in_chat': 0,
+            'not_in_chat': 0
+        }
+
+        try:
+            # Перевірка статусу бота
+            is_bot_active = False
+            try:
+                await self.bot.send_chat_action(chat_id=user.user_id, action="typing")
+                is_bot_active = True
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+                return result
+            except TelegramError:
+                pass
+
+            await asyncio.sleep(self.DELAY_BETWEEN_REQUESTS)
+
+            # Перевірка участі в чаті
+            is_in_chat = False
+            try:
+                member = await self.bot.get_chat_member(chat_id=self.chat_id, user_id=user.user_id)
+                is_in_chat = member.status in ['member', 'administrator', 'creator']
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+                return result
+            except TelegramError:
+                pass
+
+            # Оновлення статусів
+            was_active = user.is_active
+            was_in_chat = user.in_chat
+            
+            user.is_active = is_bot_active
+            user.in_chat = is_in_chat
+            user.last_status_check = timezone.now()
+            
+            if was_active and not is_bot_active:
+                user.deleted_bot_at = timezone.now()
+            elif not was_active and is_bot_active:
+                user.deleted_bot_at = None
+                
+            if was_in_chat and not is_in_chat:
+                user.left_chat_at = timezone.now()
+            elif not was_in_chat and is_in_chat:
+                user.left_chat_at = None
+                user.chat_join_date = timezone.now()
+            
+            await asyncio.to_thread(user.save)
+            
+            # Оновлення результатів
+            result['checked'] = 1
+            if is_bot_active:
+                result['active_bot'] = 1
+            else:
+                result['inactive_bot'] = 1
+            if is_in_chat:
+                result['in_chat'] = 1
+            else:
+                result['not_in_chat'] = 1
+
+        except Exception as e:
+            print(f"Error processing user {user.user_id}: {str(e)}")
+
+        return result
 
     async def check_users_status(self, users: List[TelegramUser], progress_callback=None) -> Dict:
         """Перевірка статусу всіх користувачів з урахуванням лімітів"""
@@ -115,8 +125,6 @@ class StatusChecker:
             'in_chat': 0,
             'not_in_chat': 0
         }
-
-        await self.initialize()
 
         # Розбиваємо користувачів на пачки
         batches = [users[i:i + self.BATCH_SIZE] for i in range(0, len(users), self.BATCH_SIZE)]
