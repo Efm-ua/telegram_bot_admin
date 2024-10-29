@@ -4,15 +4,26 @@ from django.db.models import Count, Q
 from django.urls import reverse, path
 from django.template.response import TemplateResponse
 from django.contrib import messages
+from django.shortcuts import redirect
 import asyncio
 from .models import TelegramUser, Statistics, UserActivity
 from .services.status_checker import StatusChecker
+from .services.message_sender import MessageSender
+from .forms import MessageForm
 
 @admin.action(description="Перевірити статус вибраних користувачів")
 def check_users_status(modeladmin, request, queryset):
     """Масова перевірка статусу користувачів"""
     try:
         checker = StatusChecker()
+        users_count = queryset.count()
+        
+        messages.info(
+            request, 
+            f'Починаємо перевірку {users_count} користувачів. '
+            f'Це може зайняти деякий час (~{users_count/15:.1f} хвилин).'
+        )
+        
         results = asyncio.run(checker.check_users_status(list(queryset)))
         
         message = (
@@ -25,6 +36,14 @@ def check_users_status(modeladmin, request, queryset):
         messages.success(request, message)
     except Exception as e:
         messages.error(request, f"Помилка при перевірці: {str(e)}")
+
+@admin.action(description="Відправити повідомлення вибраним користувачам")
+def send_message_to_users(modeladmin, request, queryset):
+    """Відправка повідомлення вибраним користувачам"""
+    selected = queryset.values_list('pk', flat=True)
+    return redirect(
+        f'send-message/?ids={",".join(str(pk) for pk in selected)}'
+    )
 
 class HasReferralsFilter(admin.SimpleListFilter):
     title = 'Наявність рефералів'
@@ -77,7 +96,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
     list_filter = (UserStatusFilter, HasReferralsFilter, 'language', 'in_chat', 'is_active')
     search_fields = ('user_id', 'username', 'referral_code')
     ordering = ('-join_date',)
-    actions = [check_users_status]
+    actions = [check_users_status, send_message_to_users]
 
     def get_urls(self):
         urls = super().get_urls()
@@ -85,6 +104,9 @@ class TelegramUserAdmin(admin.ModelAdmin):
             path('referral-stats/', 
                  self.admin_site.admin_view(self.referral_stats_view),
                  name='referral_stats'),
+            path('send-message/',
+                 self.admin_site.admin_view(self.send_message_view),
+                 name='send_message')
         ]
         return my_urls + urls
 
@@ -136,6 +158,61 @@ class TelegramUserAdmin(admin.ModelAdmin):
             return obj.last_status_check.strftime('%d.%m.%Y %H:%M')
         return 'Не перевірявся'
     last_check_display.short_description = 'Остання перевірка'
+
+    def send_message_view(self, request):
+        # Отримуємо список користувачів
+        if 'ids' in request.GET:
+            ids = request.GET['ids'].split(',')
+            users = TelegramUser.objects.filter(id__in=ids)
+        else:
+            users = TelegramUser.objects.none()
+
+        if request.method == 'POST':
+            form = MessageForm(request.POST)
+            if form.is_valid():
+                text = form.cleaned_data['message_text']
+                photo_url = form.cleaned_data.get('photo_url')
+                
+                buttons = None
+                if form.cleaned_data.get('add_buttons'):
+                    button_text = form.cleaned_data.get('button_text')
+                    button_url = form.cleaned_data.get('button_url')
+                    if button_text and button_url:
+                        buttons = {
+                            'inline_keyboard': [[{
+                                'text': button_text,
+                                'url': button_url
+                            }]]
+                        }
+
+                # Відправка повідомлень
+                sender = MessageSender()
+                results = asyncio.run(
+                    sender.send_bulk_message(list(users), text, photo_url, buttons)
+                )
+                
+                self.message_user(
+                    request,
+                    f'Повідомлення відправлено: {results["sent"]} успішно, '
+                    f'{results["failed"]} помилок, {results["inactive"]} неактивних користувачів'
+                )
+                return redirect('..')
+        else:
+            form = MessageForm()
+
+        context = {
+            'title': 'Відправка повідомлення',
+            'form': form,
+            'users_count': users.count(),
+            'active_users': users.filter(is_active=True).count(),
+            'opts': self.model._meta,
+        }
+        
+        return TemplateResponse(
+            request,
+            'admin/dashboard/send_message.html',
+            context
+        )
 
     def referral_stats_view(self, request):
         # Загальна статистика
@@ -192,7 +269,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
         }
         
         return TemplateResponse(
-            request, 
+            request,
             'admin/dashboard/referral_stats.html',
             context
         )
