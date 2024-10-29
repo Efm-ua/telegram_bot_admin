@@ -33,7 +33,7 @@ class Statistics(models.Model):
     en_users = models.IntegerField(default=0)
     total_spots = models.IntegerField(default=10000)
     used_spots = models.IntegerField(default=0)
-    chat_members = models.IntegerField(default=0, help_text="Кількість користувачів у чаті")
+    chat_members = models.IntegerField(default=0)
 
     class Meta:
         verbose_name = "Statistics"

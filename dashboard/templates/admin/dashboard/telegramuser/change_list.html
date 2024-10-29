@@ -1,15 +1,15 @@
-{% extends 'admin/change_list.html' %}
+{% extends "admin/change_list.html" %}
 {% load i18n admin_urls %}
 
 {% block object-tools-items %}
-<li>
-    <a href="{% url 'admin:referral_stats' %}" class="addlink" style="background: #79aec8;
-                  padding: 6px 12px;
-                  color: #fff;
-                  border-radius: 4px;
-                  margin-right: 8px;">
-        Статистика рефералів
-    </a>
-</li>
 {{ block.super }}
+<li>
+    <form method="post" action="{% url 'admin:import-users' %}" style="display: inline;">
+        {% csrf_token %}
+        <button type="submit" class="addlink"
+            style="background: none; border: none; padding: 0; color: #447e9b; cursor: pointer;">
+            Import Users from JSON
+        </button>
+    </form>
+</li>
 {% endblock %}
