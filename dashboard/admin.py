@@ -27,10 +27,7 @@ def check_users_status(modeladmin, request, queryset):
                 f'Це займе приблизно {(users_count / 30):.1f} секунд'
             )
 
-            # Конвертуємо queryset в список
             users_list = await sync_to_async(list)(queryset)
-
-            # Запускаємо перевірку
             results = await checker.check_users_status(users_list)
 
             message = (
@@ -48,12 +45,10 @@ def check_users_status(modeladmin, request, queryset):
                 f"Помилка при перевірці: {str(e)}"
             )
 
-    # Запускаємо асинхронну функцію
     asyncio.run(async_check())
 
 @admin.action(description="Відправити повідомлення вибраним користувачам")
 def send_message_to_users(modeladmin, request, queryset):
-    """Відправка повідомлення вибраним користувачам"""
     selected = queryset.values_list('pk', flat=True)
     return redirect(
         f'send-message/?ids={",".join(str(pk) for pk in selected)}'
@@ -100,30 +95,96 @@ class UserStatusFilter(admin.SimpleListFilter):
         if self.value() == 'never_checked':
             return queryset.filter(last_status_check__isnull=True)
 
+class ReferralFilter(admin.SimpleListFilter):
+    title = 'Реферали користувача'
+    parameter_name = 'referred_by'
+
+    def lookups(self, request, model_admin):
+        user_id = request.GET.get('user_id')
+        if user_id:
+            try:
+                user = TelegramUser.objects.get(user_id=user_id)
+                return [(str(user.user_id), f"{user.username or user.user_id}")]
+            except TelegramUser.DoesNotExist:
+                pass
+        return []
+
+    def queryset(self, request, queryset):
+        if self.value():
+            return queryset.filter(referred_by__user_id=self.value())
+
 @admin.register(TelegramUser)
 class TelegramUserAdmin(admin.ModelAdmin):
     change_list_template = 'admin/dashboard/telegramuser/change_list.html'
     
     list_display = ('user_id', 'username_display', 'language', 
-                   'referrals_display', 'bot_status', 'chat_status', 
-                   'last_check_display', 'join_date')
-    list_filter = (UserStatusFilter, HasReferralsFilter, 'language', 'in_chat', 'is_active')
+                   'referrals_display', 'referrer_display', 'bot_status', 
+                   'chat_status', 'last_check_display', 'join_date')
+    list_filter = (UserStatusFilter, HasReferralsFilter, ReferralFilter, 
+                  'language', 'in_chat', 'is_active')
     search_fields = ('user_id', 'username', 'referral_code')
     ordering = ('-join_date',)
     actions = [check_users_status, send_message_to_users]
 
+    def get_ordering(self, request):
+        params = request.GET.copy()
+        ordering = params.get('o', '')
+        
+        try:
+            ordering = str(ordering)
+            desc = ordering.startswith('-')
+            if desc:
+                ordering = ordering[1:]
+            
+            ordering_fields = {
+                '0': 'user_id',
+                '1': 'username',
+                '2': 'language',
+                '3': 'referrals_count',
+                '4': 'referred_by__username',
+                '5': 'is_active',
+                '6': 'in_chat',
+                '7': 'last_status_check',
+                '8': 'join_date'
+            }
+            
+            field = ordering_fields.get(ordering, 'join_date')
+            if desc:
+                field = f'-{field}'
+                
+            return [field]
+            
+        except (ValueError, KeyError):
+            return ['-join_date']
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        queryset = queryset.annotate(referrals_count=Count('referrals'))
+        ordering = request.GET.get('o', '')
+        
+        if ordering in ['3', '-3', '4', '-4']:
+            queryset = queryset.select_related('referred_by')
+        
+        return queryset
+
     def get_urls(self):
         urls = super().get_urls()
         my_urls = [
-            path('referral-stats/', 
-                 self.admin_site.admin_view(self.referral_stats_view),
-                 name='referral_stats'),
-            path('send-message/',
-                 self.admin_site.admin_view(self.send_message_view),
-                 name='send_message'),
-            path('import-users/', 
-                 self.admin_site.admin_view(self.import_users_view),
-                 name='import-users')
+            path(
+                'import-users/',
+                self.admin_site.admin_view(self.import_users_view),
+                name='%s_%s_import-users' % (self.model._meta.app_label, self.model._meta.model_name)
+            ),
+            path(
+                'referral-stats/', 
+                self.admin_site.admin_view(self.referral_stats_view),
+                name='referral_stats'
+            ),
+            path(
+                'send-message/',
+                self.admin_site.admin_view(self.send_message_view),
+                name='send_message'
+            ),
         ]
         return my_urls + urls
 
@@ -135,18 +196,33 @@ class TelegramUserAdmin(admin.ModelAdmin):
                 obj.username
             )
         return f'User {obj.user_id}'
+    username_display.admin_order_field = 'username'
     username_display.short_description = 'Username'
 
     def referrals_display(self, obj):
-        count = obj.referrals.count()
+        count = obj.referrals_count if hasattr(obj, 'referrals_count') else obj.referrals.count()
         if count > 0:
+            url = f"?referred_by={obj.user_id}"
             return format_html(
-                '<span style="color: green;">{}</span> {}',
+                '<a href="{}"><span style="color: green;">{}</span> {}</a>',
+                url,
                 count,
                 'рефералів' if count != 1 else 'реферал'
             )
         return '0 рефералів'
+    referrals_display.admin_order_field = 'referrals_count'
     referrals_display.short_description = 'Реферали'
+
+    def referrer_display(self, obj):
+        if obj.referred_by:
+            return format_html(
+                '<a href="?referred_by={}">{}</a>',
+                obj.referred_by.user_id,
+                obj.referred_by.username or obj.referred_by.user_id
+            )
+        return '-'
+    referrer_display.admin_order_field = 'referred_by__username'
+    referrer_display.short_description = 'Запросив'
 
     def bot_status(self, obj):
         icon = '✓' if obj.is_active else '✗'
@@ -157,6 +233,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
             '<span style="color: {};">{} {}{}</span>', 
             color, icon, status, date
         )
+    bot_status.admin_order_field = 'is_active'
     bot_status.short_description = 'Статус бота'
 
     def chat_status(self, obj):
@@ -168,12 +245,14 @@ class TelegramUserAdmin(admin.ModelAdmin):
             '<span style="color: {};">{} {}{}</span>', 
             color, icon, status, date
         )
+    chat_status.admin_order_field = 'in_chat'
     chat_status.short_description = 'Статус в чаті'
 
     def last_check_display(self, obj):
         if obj.last_status_check:
             return obj.last_status_check.strftime('%d.%m.%Y %H:%M')
         return 'Не перевірявся'
+    last_check_display.admin_order_field = 'last_status_check'
     last_check_display.short_description = 'Остання перевірка'
 
     def send_message_view(self, request):
@@ -257,13 +336,13 @@ class TelegramUserAdmin(admin.ModelAdmin):
         users_with_refs = TelegramUser.objects.annotate(
             refs_count=Count('referrals')
         ).filter(refs_count__gt=0)
-        
+       
         total_referrals = sum(user.refs_count for user in users_with_refs)
-        
+       
         top_referrers = users_with_refs.order_by('-refs_count')[:20]
         for user in top_referrers:
             user.refs_count = user.referrals.count()
-        
+       
         ranges = [
             {'min': 0, 'max': 0, 'name': 'Без рефералів'},
             {'min': 1, 'max': 2, 'name': '1-2 реферали'},
@@ -285,7 +364,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
                     refs_count__gte=r['min'], 
                     refs_count__lte=r['max']
                 ).count()
-            
+           
             referral_ranges.append({
                 'name': r['name'],
                 'count': count,
@@ -302,7 +381,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
             'referral_ranges': referral_ranges,
             'opts': self.model._meta,
         }
-        
+       
         return TemplateResponse(
             request,
             'admin/dashboard/referral_stats.html',
@@ -312,7 +391,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
 @admin.register(Statistics)
 class StatisticsAdmin(admin.ModelAdmin):
     list_display = ('date', 'total_bot_users', 'webapp_opens', 
-                   'language_distribution', 'chat_members_display')
+                    'language_distribution', 'chat_members_display')
     ordering = ('-date',)
 
     def language_distribution(self, obj):
