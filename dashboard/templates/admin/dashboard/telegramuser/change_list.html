@@ -4,7 +4,7 @@
 {% block object-tools-items %}
 {{ block.super }}
 <li>
-    <form method="post" action="{% url 'admin:import-users' %}" style="display: inline;">
+    <form method="post" action="{% url 'admin:dashboard_telegramuser_import-users' %}" style="display: inline;">
         {% csrf_token %}
         <button type="submit" class="addlink"
             style="background: none; border: none; padding: 0; color: #447e9b; cursor: pointer;">
